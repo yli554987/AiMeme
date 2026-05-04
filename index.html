@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>腾讯视频AI贴纸表情包功能演示</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand-row">
+          <h1>腾讯视频AI贴纸表情包功能演示</h1>
+        </div>
+        <nav class="top-actions" aria-label="页面工具">
+          <button class="info-btn" id="productInfoBtn" type="button">产品说明</button>
+          <button class="clear-btn" id="clearBtn" type="button">清空全部</button>
+        </nav>
+      </header>
+
+      <section class="workspace">
+        <aside class="left-stack" aria-label="配置和素材">
+          <section class="panel step-card api-box">
+            <div class="step-title">
+              <span class="step-index">1</span>
+              <h2>配置 API Key</h2>
+            </div>
+            <label class="field">
+              <span>选择服务商</span>
+              <select id="providerSelect">
+                <option value="qwen-image" selected>通义千问 qwen-image-2.0-pro</option>
+                <option value="openai-gpt-image-2">OpenAI gpt-image-2</option>
+                <option value="minimax">MiniMax image-01</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>API Key</span>
+              <div class="key-input-wrap">
+                <input
+                  id="apiKeyInput"
+                  type="password"
+                  placeholder="仅本次页面使用，不保存"
+                  autocomplete="off"
+                />
+                <span aria-hidden="true">◎</span>
+              </div>
+            </label>
+            <p class="saved-note">API Key 仅保存在当前页面内存</p>
+          </section>
+
+          <section class="panel step-card reference-box">
+            <div class="step-title">
+              <span class="step-index">2</span>
+              <h2>上传素材</h2>
+            </div>
+
+            <div class="upload-block">
+              <label>视频截图（包含字幕）</label>
+              <label class="media-upload" for="imageInput" id="dropZone">
+                <input id="imageInput" type="file" accept="image/*" />
+                <div class="preview-strip" id="sourcePreview" aria-live="polite">
+                  <div class="empty-preview">上传真人截图</div>
+                </div>
+              </label>
+            </div>
+
+            <label class="field compact-field">
+              <span>参考图 URL（可选）</span>
+              <input
+                id="referenceUrlInput"
+                type="url"
+                placeholder="https://example.com/person.jpg"
+              />
+            </label>
+
+            <div class="upload-block">
+              <label>广告产品图（上传后必用）</label>
+              <label class="media-upload product-upload" for="adImageInput">
+                <input id="adImageInput" type="file" accept="image/*" />
+                <div class="preview-strip" id="adPreview" aria-live="polite">
+                  <div class="empty-preview">上传广告物品图</div>
+                </div>
+              </label>
+            </div>
+
+            <p class="file-note">支持 jpg / png / webp，最大 10MB</p>
+            <div class="action-stack">
+              <button class="secondary-action recognize-action" id="recognizeBtn" type="button">
+                识别上传图片
+              </button>
+              <button class="primary-action" id="generateBtn" type="button">
+                生成贴纸表情包
+              </button>
+            </div>
+          </section>
+        </aside>
+
+        <section class="right-workspace" aria-label="识别和结果">
+          <section class="panel step-card recognition-panel">
+            <div class="step-title horizontal">
+              <span class="step-index">3</span>
+              <h2>AI 自动识别结果</h2>
+            </div>
+            <div class="recognition-grid">
+              <article class="recognition-card">
+                <div class="recognition-title"><span>♙</span>识别人物</div>
+                <div class="person-row">
+                  <div class="person-thumb is-empty" id="personThumb"></div>
+                  <label class="field inline-edit">
+                    <input id="characterInput" type="text" placeholder="上传后自动识别" />
+                  </label>
+                </div>
+                <span class="ok-pill pending" id="personStatus">待识别</span>
+              </article>
+
+              <article class="recognition-card">
+                <div class="recognition-title"><span>▣</span>识别场景</div>
+                <label class="field inline-edit">
+                  <input id="sceneInput" type="text" placeholder="上传后自动识别" />
+                </label>
+                <span class="ok-pill pending" id="sceneStatus">待识别</span>
+              </article>
+
+              <article class="recognition-card">
+                <div class="recognition-title"><span>♧</span>识别动作</div>
+                <label class="field inline-edit">
+                  <input id="subtitleInput" type="text" placeholder="上传后自动识别" />
+                </label>
+                <span class="ok-pill pending" id="actionStatus">待识别</span>
+              </article>
+
+              <article class="recognition-card">
+                <div class="recognition-title"><span>▤</span>识别台词</div>
+                <label class="field inline-edit">
+                  <input id="captionInput" type="text" placeholder="上传后自动提炼主文案" />
+                </label>
+                <span class="ok-pill pending" id="lineStatus">待识别</span>
+              </article>
+            </div>
+
+            <label class="field hidden-helper">
+              <span>识别到的广告物品 / 品牌元素</span>
+              <input id="adObjectInput" type="text" value="蓝色汽水罐" maxlength="36" />
+            </label>
+          </section>
+
+          <section class="panel step-card result-panel">
+            <div class="result-heading">
+              <div class="step-title horizontal">
+                <span class="step-index">4</span>
+                <h2>生成结果预览</h2>
+              </div>
+              <span id="statusPill">待上传</span>
+            </div>
+
+            <div class="result-workbench">
+              <section class="prompt-card" aria-label="生成提示词">
+                <textarea id="promptOutput" readonly></textarea>
+              </section>
+
+              <section class="sticker-output" aria-label="贴纸生成结果">
+                <div class="canvas-stage" aria-label="当前贴纸预览">
+                  <canvas id="stickerCanvas" width="900" height="900"></canvas>
+                  <img id="apiImage" alt="API 生成结果" />
+                  <div class="output-placeholder" id="outputPlaceholder">贴纸结果区</div>
+                </div>
+                <button class="output-download" id="outputDownloadBtn" type="button" disabled>
+                  <span class="download-icon" aria-hidden="true">↓</span>
+                  下载贴纸
+                </button>
+              </section>
+            </div>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <div class="modal-backdrop" id="productInfoModal" hidden>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="productInfoTitle">
+        <button class="modal-close" id="closeProductInfoBtn" type="button" aria-label="关闭">×</button>
+        <article class="product-doc">
+          <h2 id="productInfoTitle">产品说明</h2>
+          <p class="doc-lead">
+            整个网页表示“腾讯视频 AI 贴纸表情包功能”的可交互演示：从视频截图入口进入，AI 自动理解剧情画面，并生成可分享的贴纸表情包。
+          </p>
+
+          <h3>功能入口</h3>
+          <figure class="entry-figure" aria-label="腾讯视频截图浮层中的做贴纸入口示意">
+            <img
+              class="entry-image"
+              src="assets/feature-entry.png"
+              alt="腾讯视频截图浮层中的做贴纸入口"
+            />
+            <figcaption>在用户已有的截图浮层里新增「做贴纸」入口，不打断播放流程。</figcaption>
+          </figure>
+
+          <h3>核心流程</h3>
+          <ol>
+            <li>用户在观看视频时截图，截图中包含人物、画面动作和字幕台词。</li>
+            <li>点击「做贴纸」后，AI 识别人、场景、动作、情绪和台词语义。</li>
+            <li>系统生成多版本贴纸：剧情还原版、Q版卡通版、品牌融合版。</li>
+            <li>用户选择更好看、更适合表达的版本下载或分享。</li>
+          </ol>
+
+          <h3>产品价值</h3>
+          <p>
+            这个功能不是把广告硬塞给用户，而是让广告元素成为用户表达工具的一部分。品牌可以作为杯子、饮料、角标或装饰物自然融入贴纸，用户因为好玩和好看而主动选择与传播。
+          </p>
+
+          <h3>演示说明</h3>
+          <p>
+            当前页面用于展示功能实现链路：配置服务商 Key、上传截图和广告物品图、查看 AI 识别结果、生成贴纸预览、下载结果。真实上线时可接入腾讯视频截图入口、后端代理和正式生图服务。
+          </p>
+        </article>
+      </section>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
