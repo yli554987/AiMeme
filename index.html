@@ -64,17 +64,8 @@
               </label>
             </div>
 
-            <label class="field compact-field">
-              <span>参考图 URL（可选）</span>
-              <input
-                id="referenceUrlInput"
-                type="url"
-                placeholder="https://example.com/person.jpg"
-              />
-            </label>
-
             <div class="upload-block">
-              <label>广告产品图（上传后必用）</label>
+              <label>广告产品图（可选）</label>
               <label class="media-upload product-upload" for="adImageInput">
                 <input id="adImageInput" type="file" accept="image/*" />
                 <div class="preview-strip" id="adPreview" aria-live="polite">
@@ -141,6 +132,10 @@
             <label class="field hidden-helper">
               <span>识别到的广告物品 / 品牌元素</span>
               <input id="adObjectInput" type="text" value="蓝色汽水罐" maxlength="36" />
+            </label>
+            <label class="field hidden-helper">
+              <span>广告产品植入方式</span>
+              <input id="productUsageInput" type="text" value="" />
             </label>
           </section>
 
