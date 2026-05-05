@@ -9,7 +9,6 @@ const sceneInput = document.querySelector("#sceneInput");
 const personThumb = document.querySelector("#personThumb");
 const providerSelect = document.querySelector("#providerSelect");
 const apiKeyInput = document.querySelector("#apiKeyInput");
-const referenceUrlInput = document.querySelector("#referenceUrlInput");
 const adImageInput = document.querySelector("#adImageInput");
 const adPreview = document.querySelector("#adPreview");
 const clearBtn = document.querySelector("#clearBtn");
@@ -33,8 +32,6 @@ const recognitionStatuses = [
   document.querySelector("#lineStatus"),
 ];
 
-const outputSize = 900;
-const generatedCanvases = new Map();
 const generatedApiImages = new Map();
 let sourceImage = null;
 let sourceFile = null;
@@ -44,7 +41,6 @@ let activeStyle = "real";
 let hasGeneratedSticker = false;
 let hasRecognized = false;
 let recognitionPromise = null;
-const alwaysUseAd = true;
 const alwaysTransparent = true;
 
 const styles = [
@@ -148,17 +144,16 @@ function clearRecognitionFields() {
 function markReferencesChanged() {
   hasRecognized = false;
   generatedApiImages.clear();
-  generatedCanvases.clear();
   showCanvasPreview();
   setDownloadReady(false);
   setRecognitionState("idle");
   clearRecognitionFields();
-  setStatus(sourceImage || referenceUrlInput.value.trim() ? "素材已上传，请点击识别上传图片" : "待上传");
+  setStatus(sourceImage ? "素材已上传，请点击识别上传图片" : "待上传");
 }
 
 async function runRecognition({ requireApi = false } = {}) {
-  if (!sourceImage && !referenceUrlInput.value.trim()) {
-    setStatus("请先上传视频截图或填写参考图 URL");
+  if (!sourceImage) {
+    setStatus("请先上传视频截图");
     return false;
   }
 
@@ -220,23 +215,8 @@ function updatePersonThumb(src) {
   personThumb.classList.remove("is-empty");
 }
 
-function updateReferenceUrlPreview() {
-  const url = referenceUrlInput.value.trim();
-  if (!url || sourceFile) return;
-
-  sourcePreview.innerHTML = "";
-  const preview = document.createElement("img");
-  preview.src = url;
-  preview.alt = "参考图 URL 预览";
-  preview.referrerPolicy = "no-referrer";
-  preview.onerror = () => {
-    sourcePreview.innerHTML = '<div class="empty-preview">参考图 URL</div>';
-  };
-  sourcePreview.append(preview);
-}
-
 function inferProductName() {
-  const raw = `${adImageFile?.name || ""} ${referenceUrlInput.value || ""}`.toLowerCase();
+  const raw = `${adImageFile?.name || ""}`.toLowerCase();
   if (/milk|奶|bottle|瓶/.test(raw)) return "牛奶瓶";
   if (/coffee|咖啡/.test(raw)) return "咖啡杯";
   if (/tea|茶/.test(raw)) return "茶饮杯";
@@ -291,7 +271,7 @@ function getRecognitionInstruction() {
 
 function getVisionContentForOpenAI(text) {
   const content = [{ type: "text", text }];
-  const mainImage = sourceImage?.src || referenceUrlInput.value.trim();
+  const mainImage = sourceImage?.src;
   if (mainImage) {
     content.push({
       type: "image_url",
@@ -309,7 +289,7 @@ function getVisionContentForOpenAI(text) {
 
 function getVisionContentForDashScope(text) {
   const content = [{ text }];
-  const mainImage = sourceImage?.src || referenceUrlInput.value.trim();
+  const mainImage = sourceImage?.src;
   if (mainImage) content.push({ image: mainImage });
   if (adImage?.src) content.push({ image: adImage.src });
   return content;
@@ -453,261 +433,15 @@ function dataUrlToFile(dataUrl, filename) {
 
 function drawStarterState() {
   showCanvasPreview();
-  ctx.clearRect(0, 0, outputSize, outputSize);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
   canvasStage.classList.remove("has-result");
   if (outputPlaceholder) {
     outputPlaceholder.hidden = false;
     outputPlaceholder.textContent = "贴纸结果区";
   }
-  drawTransparentOrSoftBackground(ctx);
-  drawDecorativeBurst(ctx, 450, 395, 250, "#f2c94c");
-  drawProduct(ctx, 640, 560, "蓝色汽水罐", "poster", 1);
-  drawFacePlaceholder(ctx, 360, 315);
-  drawStickerText(ctx, "上传人物截图", 450, 735, "poster");
   clearRecognitionFields();
   setDownloadReady(false);
   setRecognitionState("idle");
-}
-
-function drawTransparentOrSoftBackground(context) {
-  if (alwaysTransparent) return;
-  const bg = context.createLinearGradient(0, 0, outputSize, outputSize);
-  bg.addColorStop(0, "#f7fbff");
-  bg.addColorStop(0.55, "#fff7e3");
-  bg.addColorStop(1, "#ffecef");
-  context.fillStyle = bg;
-  context.fillRect(0, 0, outputSize, outputSize);
-}
-
-function roundedPath(context, x, y, width, height, radius) {
-  const r = Math.min(radius, width / 2, height / 2);
-  context.beginPath();
-  context.moveTo(x + r, y);
-  context.arcTo(x + width, y, x + width, y + height, r);
-  context.arcTo(x + width, y + height, x, y + height, r);
-  context.arcTo(x, y + height, x, y, r);
-  context.arcTo(x, y, x + width, y, r);
-  context.closePath();
-}
-
-function drawFacePlaceholder(context, x, y) {
-  context.save();
-  context.shadowColor = "rgba(23, 32, 27, 0.2)";
-  context.shadowBlur = 28;
-  context.shadowOffsetY = 18;
-  context.lineWidth = 22;
-  context.strokeStyle = "#ffffff";
-  context.fillStyle = "#f2c3a0";
-  context.beginPath();
-  context.ellipse(x, y, 142, 168, 0, 0, Math.PI * 2);
-  context.fill();
-  context.stroke();
-  context.shadowColor = "transparent";
-  context.fillStyle = "#20262d";
-  context.beginPath();
-  context.ellipse(x, y - 98, 154, 78, 0, Math.PI, Math.PI * 2);
-  context.fill();
-  context.fillStyle = "#12171c";
-  context.beginPath();
-  context.ellipse(x - 46, y - 18, 11, 15, 0, 0, Math.PI * 2);
-  context.ellipse(x + 46, y - 18, 11, 15, 0, 0, Math.PI * 2);
-  context.fill();
-  context.strokeStyle = "#b46158";
-  context.lineWidth = 8;
-  context.beginPath();
-  context.arc(x, y + 28, 42, 0.08, Math.PI - 0.08);
-  context.stroke();
-  context.restore();
-}
-
-function getPersonCrop() {
-  const img = sourceImage;
-  const crop = Math.min(img.width, img.height) * 0.78;
-  const srcX = Math.max(0, (img.width - crop) / 2);
-  const srcY = Math.max(0, img.height * 0.04);
-  return { srcX, srcY, srcW: crop, srcH: Math.min(crop, img.height - srcY) };
-}
-
-function drawPersonHead(context, variantStyle) {
-  const { srcX, srcY, srcW, srcH } = getPersonCrop();
-  const headSize = variantStyle === "cartoon" ? 500 : 465;
-  const x = variantStyle === "poster" ? 500 : 430;
-  const y = variantStyle === "poster" ? 305 : 310;
-
-  context.save();
-  context.shadowColor = "rgba(23, 32, 27, 0.26)";
-  context.shadowBlur = 34;
-  context.shadowOffsetY = 20;
-  context.lineWidth = 28;
-  context.strokeStyle = "#ffffff";
-  context.beginPath();
-  context.ellipse(x, y, headSize * 0.43, headSize * 0.49, 0, 0, Math.PI * 2);
-  context.stroke();
-  context.clip();
-  context.filter = getImageFilter(variantStyle);
-  context.drawImage(sourceImage, srcX, srcY, srcW, srcH, x - headSize / 2, y - headSize / 2, headSize, headSize);
-  context.filter = "none";
-  if (variantStyle === "cartoon") drawCartoonFaceOverlay(context, x, y);
-  context.restore();
-
-  context.save();
-  context.lineWidth = 24;
-  context.strokeStyle = "#ffffff";
-  context.beginPath();
-  context.ellipse(x, y, headSize * 0.43, headSize * 0.49, 0, 0, Math.PI * 2);
-  context.stroke();
-  context.restore();
-}
-
-function drawSmallBody(context, variantStyle) {
-  context.save();
-  context.translate(392, 565);
-  context.rotate(variantStyle === "poster" ? -0.05 : 0.04);
-  context.shadowColor = "rgba(23, 32, 27, 0.2)";
-  context.shadowBlur = 24;
-  context.shadowOffsetY = 16;
-  context.lineWidth = 22;
-  context.strokeStyle = "#ffffff";
-  roundedPath(context, -145, -85, 300, 230, 72);
-  context.fillStyle = variantStyle === "poster" ? "#1159a6" : "#24364d";
-  context.fill();
-  context.stroke();
-  context.shadowColor = "transparent";
-  context.fillStyle = "#ffffff";
-  roundedPath(context, -36, -78, 84, 88, 22);
-  context.fill();
-  context.restore();
-}
-
-function getImageFilter(variantStyle) {
-  if (variantStyle === "cartoon") return "contrast(1.24) saturate(1.85) brightness(1.08)";
-  if (variantStyle === "poster") return "contrast(1.08) saturate(1.2)";
-  return "contrast(1.03) saturate(1.08)";
-}
-
-function drawCartoonFaceOverlay(context, x, y) {
-  context.globalCompositeOperation = "source-over";
-  context.fillStyle = "rgba(255, 110, 120, 0.42)";
-  context.beginPath();
-  context.ellipse(x - 95, y + 42, 42, 24, -0.08, 0, Math.PI * 2);
-  context.ellipse(x + 95, y + 42, 42, 24, 0.08, 0, Math.PI * 2);
-  context.fill();
-  context.strokeStyle = "#ffffff";
-  context.lineWidth = 10;
-  [["left", -135], ["right", 135]].forEach((item) => {
-    const offset = item[1];
-    context.beginPath();
-    context.moveTo(x + offset, y + 42);
-    context.lineTo(x + offset - 18, y + 62);
-    context.stroke();
-    context.beginPath();
-    context.moveTo(x + offset + 28, y + 42);
-    context.lineTo(x + offset + 45, y + 62);
-    context.stroke();
-  });
-  drawSweatDrop(context, x - 190, y - 70, 1.1);
-}
-
-function drawDecorativeBurst(context, x, y, radius, color) {
-  context.save();
-  context.translate(x, y);
-  context.fillStyle = color;
-  for (let i = 0; i < 18; i += 1) {
-    context.rotate((Math.PI * 2) / 18);
-    context.beginPath();
-    context.moveTo(radius * 0.55, -8);
-    context.lineTo(radius, 0);
-    context.lineTo(radius * 0.55, 8);
-    context.closePath();
-    context.fill();
-  }
-  context.restore();
-}
-
-function drawSweatDrop(context, x, y, scale = 1) {
-  context.save();
-  context.translate(x, y);
-  context.scale(scale, scale);
-  context.shadowColor = "rgba(0, 87, 140, 0.22)";
-  context.shadowBlur = 12;
-  context.fillStyle = "#21a7e8";
-  context.beginPath();
-  context.moveTo(0, -72);
-  context.bezierCurveTo(56, -16, 58, 54, 0, 70);
-  context.bezierCurveTo(-58, 54, -56, -16, 0, -72);
-  context.fill();
-  context.fillStyle = "rgba(255, 255, 255, 0.42)";
-  context.beginPath();
-  context.ellipse(-18, -24, 14, 28, 0.35, 0, Math.PI * 2);
-  context.fill();
-  context.restore();
-}
-
-function drawProduct(context, x, y, label, variantStyle, scale = 1) {
-  context.save();
-  context.translate(x, y);
-  context.rotate(variantStyle === "poster" ? 0.17 : -0.16);
-  context.scale(scale, scale);
-  context.shadowColor = "rgba(23, 32, 27, 0.25)";
-  context.shadowBlur = 18;
-  context.shadowOffsetY = 12;
-  context.lineWidth = 12;
-  context.strokeStyle = "#ffffff";
-
-  if (/奶|瓶|milk|bottle/i.test(label)) {
-    roundedPath(context, -52, -118, 104, 218, 22);
-    context.fillStyle = "#ffffff";
-    context.fill();
-    context.stroke();
-    roundedPath(context, -28, -152, 56, 42, 12);
-    context.fill();
-    context.stroke();
-    context.fillStyle = "#24a06e";
-    roundedPath(context, -38, -40, 76, 80, 18);
-    context.fill();
-  } else {
-    roundedPath(context, -54, -118, 108, 236, 28);
-    context.fillStyle = "#1267b3";
-    context.fill();
-    context.stroke();
-    context.fillStyle = "#e84d4f";
-    context.beginPath();
-    context.arc(0, -10, 38, 0, Math.PI * 2);
-    context.fill();
-    context.fillStyle = "#ffffff";
-    context.font = "900 26px Inter, system-ui, sans-serif";
-    context.textAlign = "center";
-    context.fillText("AD", 0, 0);
-  }
-
-  context.shadowColor = "transparent";
-  context.fillStyle = "#ffffff";
-  context.font = "900 18px Inter, system-ui, sans-serif";
-  context.textAlign = "center";
-  context.fillText(label.slice(0, 5), 0, 70);
-  context.restore();
-}
-
-function drawSideText(context, text, side, variantStyle) {
-  const chars = normalizeStickerText(text || getPrimaryCaption()).slice(0, 5).split("");
-  const x = side === "left" ? 108 : 790;
-  const y = side === "left" ? 170 : 170;
-  context.save();
-  chars.forEach((char, index) => {
-    context.beginPath();
-    context.arc(x, y + index * 98, 46, 0, Math.PI * 2);
-    context.fillStyle = variantStyle === "poster" ? "#1267b3" : "#e84d4f";
-    context.fill();
-    context.lineWidth = 10;
-    context.strokeStyle = "#ffffff";
-    context.stroke();
-    context.fillStyle = "#fff3a0";
-    context.font = "900 44px serif";
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    context.fillText(char, x, y + index * 98 + 2);
-  });
-  context.restore();
 }
 
 function getPrimaryCaption() {
@@ -722,46 +456,6 @@ function normalizeStickerText(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
 }
 
-function drawStickerText(context, text, x, y, variantStyle) {
-  const cleanText = normalizeStickerText(text) || "拿下";
-  const lines = wrapText(context, cleanText, 620, 2, "900 64px Inter, system-ui, sans-serif");
-  const height = 76 + lines.length * 64;
-
-  context.save();
-  context.translate(x, y);
-  context.rotate(variantStyle === "cartoon" ? -0.04 : 0.025);
-  roundedPath(context, -345, -height / 2, 690, height, 34);
-  context.fillStyle = variantStyle === "poster" ? "#1267b3" : "#e84d4f";
-  context.strokeStyle = "#ffffff";
-  context.lineWidth = 14;
-  context.shadowColor = "rgba(23, 32, 27, 0.2)";
-  context.shadowBlur = 22;
-  context.shadowOffsetY = 14;
-  context.fill();
-  context.stroke();
-  context.shadowColor = "transparent";
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.font = "900 64px Inter, system-ui, sans-serif";
-  context.lineWidth = 10;
-  context.strokeStyle = "rgba(23, 32, 27, 0.2)";
-  context.fillStyle = "#fff5b5";
-  lines.forEach((line, index) => {
-    const lineY = -((lines.length - 1) * 32) + index * 64 + 3;
-    context.strokeText(line, 0, lineY);
-    context.fillText(line, 0, lineY);
-  });
-  context.restore();
-}
-
-function createDownloadIcon() {
-  const icon = document.createElement("span");
-  icon.className = "download-icon";
-  icon.setAttribute("aria-hidden", "true");
-  icon.textContent = "↓";
-  return icon;
-}
-
 function showOutputProcess(message) {
   showCanvasPreview();
   canvasStage.classList.remove("has-result");
@@ -769,91 +463,6 @@ function showOutputProcess(message) {
     outputPlaceholder.hidden = false;
     outputPlaceholder.textContent = message;
   }
-}
-
-function drawSceneTag(context, text, variantStyle) {
-  const cleanText = normalizeStickerText(text);
-  if (!cleanText) return;
-
-  const tagText = `“${cleanText.slice(0, 18)}”`;
-  context.save();
-  context.translate(455, variantStyle === "poster" ? 108 : 112);
-  context.rotate(variantStyle === "cartoon" ? 0.04 : -0.025);
-  context.font = "800 30px Inter, system-ui, sans-serif";
-  const width = Math.min(700, Math.max(280, context.measureText(tagText).width + 56));
-  roundedPath(context, -width / 2, -31, width, 62, 22);
-  context.fillStyle = "rgba(255, 255, 255, 0.94)";
-  context.strokeStyle = variantStyle === "poster" ? "#1267b3" : "#e84d4f";
-  context.lineWidth = 6;
-  context.shadowColor = "rgba(23, 32, 27, 0.12)";
-  context.shadowBlur = 16;
-  context.shadowOffsetY = 8;
-  context.fill();
-  context.stroke();
-  context.shadowColor = "transparent";
-  context.fillStyle = "#17201b";
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.fillText(tagText, 0, 2);
-  context.restore();
-}
-
-function getDecorativeCaption(text) {
-  const cleanText = normalizeStickerText(text);
-  if (cleanText.length <= 5) return cleanText;
-  return cleanText.slice(0, 5);
-}
-
-function wrapText(context, text, maxWidth, maxLines, font) {
-  context.save();
-  context.font = font;
-  const chars = text.includes(" ") ? text.split(/\s+/) : text.split("");
-  const lines = [];
-  let current = "";
-  chars.forEach((char) => {
-    const next = text.includes(" ") && current ? `${current} ${char}` : `${current}${char}`;
-    if (context.measureText(next).width <= maxWidth) {
-      current = next;
-    } else {
-      if (current) lines.push(current);
-      current = char;
-    }
-  });
-  if (current) lines.push(current);
-  context.restore();
-  return lines.slice(0, maxLines || 2);
-}
-
-function renderSticker(targetCanvas, variantStyle) {
-  const tctx = targetCanvas.getContext("2d");
-  targetCanvas.width = outputSize;
-  targetCanvas.height = outputSize;
-  tctx.clearRect(0, 0, outputSize, outputSize);
-
-  drawTransparentOrSoftBackground(tctx);
-
-  if (variantStyle !== "real") {
-    drawDecorativeBurst(tctx, 452, 346, variantStyle === "cartoon" ? 245 : 290, variantStyle === "cartoon" ? "#f2c94c" : "#dff0ff");
-  }
-
-  drawSmallBody(tctx, variantStyle);
-  drawPersonHead(tctx, variantStyle);
-
-  if (variantStyle === "cartoon") {
-    drawSweatDrop(tctx, 180, 245, 1.05);
-  }
-
-  const productLabel = adObjectInput.value.trim() || "广告物品";
-  if (alwaysUseAd || variantStyle === "poster") {
-    drawProduct(tctx, variantStyle === "poster" ? 705 : 670, variantStyle === "poster" ? 490 : 555, productLabel, variantStyle, variantStyle === "poster" ? 1.08 : 0.92);
-  }
-
-  if (variantStyle === "poster") {
-    drawSideText(tctx, getDecorativeCaption(getPrimaryCaption()), "left", variantStyle);
-    drawSideText(tctx, getDecorativeCaption(getPrimaryCaption()), "right", variantStyle);
-  }
-
-  drawStickerText(tctx, getPrimaryCaption(), 450, 760, variantStyle);
 }
 
 function buildPrompt(styleId = getSelectedStyle()) {
@@ -880,7 +489,7 @@ function buildPrompt(styleId = getSelectedStyle()) {
     `贴纸上唯一允许出现的大标题文字是：「${caption}」。必须只显示这句主文案。`,
     `不要生成与主文案无关的大字，不要把动作描述、场景描述、人物描述、广告物品名称改写成标题，不要额外编造口号。装饰文字如必须出现，只能重复或拆分主文案「${caption}」。`,
     adLine,
-    "如果参考图 URL 存在，优先把它作为人物/画面视觉参考；视频真人截图用于识别人、动作、台词和整体场景。",
+    "视频真人截图用于识别人、动作、台词和整体场景。",
     "构图要求：人物是主体，大头占画面中心；有厚白描边、干净阴影、可直接用于聊天贴纸；广告元素自然融入画面，不像硬广横幅。",
     "文字要求：主文案放在底部或人物旁边的大标题区；字体简单粗大，最多一到两行；不要添加任何小气泡台词或说明文字。",
     "风格参考：真人广告贴纸、明星代言海报、可爱大头贴、商品装饰物、干净白底或透明底。",
@@ -889,33 +498,7 @@ function buildPrompt(styleId = getSelectedStyle()) {
 
 async function generateSticker() {
   const provider = providerSelect.value;
-  if (provider !== "local") {
-    await generateWithApi(provider);
-    return;
-  }
-
-  if (!sourceImage && !referenceUrlInput.value.trim()) {
-    setStatus("请先上传视频截图或填写参考图 URL");
-    return;
-  }
-
-  if (!hasRecognized && !hasManualRecognitionInput()) {
-    setStatus("请先识别上传图片，或手动填写识别结果和主文案");
-    return;
-  }
-
-  const selected = getSelectedStyle();
-  activeStyle = selected;
-  generatedCanvases.clear();
-  generatedApiImages.clear();
-
-  const variantCanvas = document.createElement("canvas");
-  renderSticker(variantCanvas, selected);
-  generatedCanvases.set(selected, variantCanvas);
-  drawActiveCanvas(selected);
-  promptOutput.value = buildPrompt(selected);
-  setDownloadReady(true);
-  setStatus("已生成草图");
+  await generateWithApi(provider);
 }
 
 async function generateWithApi(provider) {
@@ -925,12 +508,12 @@ async function generateWithApi(provider) {
     return;
   }
 
-  if (!sourceImage && !referenceUrlInput.value.trim()) {
+  if (!sourceImage) {
     setStatus("请先上传视频截图");
     return;
   }
 
-  if ((sourceImage || referenceUrlInput.value.trim()) && !hasRecognized && !hasManualRecognitionInput()) {
+  if (sourceImage && !hasRecognized && !hasManualRecognitionInput()) {
     setStatus("请先识别上传图片，或手动填写识别结果和主文案");
     return;
   }
@@ -941,7 +524,6 @@ async function generateWithApi(provider) {
   generateBtn.disabled = true;
   setDownloadReady(false);
   generatedApiImages.clear();
-  generatedCanvases.clear();
   showOutputProcess("生成中...");
 
   try {
@@ -1003,8 +585,6 @@ async function requestOpenAIImage(apiKey, prompt) {
 }
 
 function getReferenceImagePayload() {
-  const url = referenceUrlInput.value.trim();
-  if (url) return url;
   if (sourceImage?.src?.startsWith("data:")) return sourceImage.src;
   return "";
 }
@@ -1143,13 +723,6 @@ function drawActiveCanvas(styleId) {
   activeStyle = styleId;
   if (generatedApiImages.has(styleId)) {
     setApiImage(generatedApiImages.get(styleId));
-  } else if (generatedCanvases.has(styleId)) {
-    showCanvasPreview();
-    ctx.clearRect(0, 0, outputSize, outputSize);
-    ctx.drawImage(generatedCanvases.get(styleId), 0, 0);
-    canvasStage.classList.add("has-result");
-    if (outputPlaceholder) outputPlaceholder.hidden = true;
-    if (outputDownloadBtn) outputDownloadBtn.disabled = false;
   }
   promptOutput.value = buildPrompt(styleId);
 }
@@ -1171,13 +744,6 @@ async function downloadSticker(styleId = activeStyle) {
     }
     return;
   }
-
-  if (!generatedCanvases.has(styleId)) return;
-  const link = document.createElement("a");
-  link.download = `ai-sticker-${styleId}.png`;
-  link.href = generatedCanvases.get(styleId).toDataURL("image/png");
-  link.click();
-  setStatus("PNG 已下载");
 }
 
 function clearAll() {
@@ -1187,7 +753,6 @@ function clearAll() {
   adImage = null;
   activeStyle = "real";
   hasRecognized = false;
-  generatedCanvases.clear();
   generatedApiImages.clear();
   showCanvasPreview();
   setDownloadReady(false);
@@ -1196,7 +761,6 @@ function clearAll() {
   imageInput.value = "";
   adImageInput.value = "";
   apiKeyInput.value = "";
-  referenceUrlInput.value = "";
   subtitleInput.value = "";
   captionInput.value = "";
   adObjectInput.value = "";
@@ -1266,7 +830,7 @@ outputDownloadBtn.addEventListener("click", () => downloadSticker(activeStyle));
 apiKeyInput.addEventListener("change", () => {
   hasRecognized = false;
   setRecognitionState("idle");
-  setStatus(sourceImage || referenceUrlInput.value.trim() ? "API Key 已更新，请点击识别上传图片" : "准备 API");
+  setStatus(sourceImage ? "API Key 已更新，请点击识别上传图片" : "准备 API");
 });
 
 document.querySelectorAll("input[name='style']").forEach((input) => {
@@ -1291,11 +855,6 @@ document.querySelectorAll("input[name='style']").forEach((input) => {
   });
 });
 
-referenceUrlInput.addEventListener("input", () => {
-  updateReferenceUrlPreview();
-  markReferencesChanged();
-});
-
 providerSelect.addEventListener("change", () => {
   hasRecognized = false;
   setRecognitionState("idle");
@@ -1304,7 +863,7 @@ providerSelect.addEventListener("change", () => {
   } else {
     clearRecognitionFields();
   }
-  const hasReference = sourceImage || referenceUrlInput.value.trim();
+  const hasReference = sourceImage;
   setStatus(hasReference ? "服务商已切换，请点击识别上传图片" : "准备 API");
 });
 
