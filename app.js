@@ -4,12 +4,12 @@ const sourcePreview = document.querySelector("#sourcePreview");
 const subtitleInput = document.querySelector("#subtitleInput");
 const captionInput = document.querySelector("#captionInput");
 const adObjectInput = document.querySelector("#adObjectInput");
-const productUsageInput = document.querySelector("#productUsageInput");
 const characterInput = document.querySelector("#characterInput");
 const sceneInput = document.querySelector("#sceneInput");
 const personThumb = document.querySelector("#personThumb");
 const providerSelect = document.querySelector("#providerSelect");
 const apiKeyInput = document.querySelector("#apiKeyInput");
+const referenceUrlInput = document.querySelector("#referenceUrlInput");
 const adImageInput = document.querySelector("#adImageInput");
 const adPreview = document.querySelector("#adPreview");
 const clearBtn = document.querySelector("#clearBtn");
@@ -44,7 +44,6 @@ let activeStyle = "real";
 let hasGeneratedSticker = false;
 let hasRecognized = false;
 let recognitionPromise = null;
-let recognitionMeta = {};
 const alwaysUseAd = true;
 const alwaysTransparent = true;
 
@@ -143,8 +142,6 @@ function clearRecognitionFields() {
   subtitleInput.value = "";
   captionInput.value = "";
   adObjectInput.value = "";
-  if (productUsageInput) productUsageInput.value = "";
-  recognitionMeta = {};
   promptOutput.value = "先填 API Key 和服务商，上传视频截图/广告物品图，然后点击“识别上传图片”。识别完成后这里会生成可编辑的个性化 Prompt，再点击生成贴纸表情包。";
 }
 
@@ -156,12 +153,12 @@ function markReferencesChanged() {
   setDownloadReady(false);
   setRecognitionState("idle");
   clearRecognitionFields();
-  setStatus(sourceImage ? "素材已上传，请点击识别上传图片" : "待上传");
+  setStatus(sourceImage || referenceUrlInput.value.trim() ? "素材已上传，请点击识别上传图片" : "待上传");
 }
 
 async function runRecognition({ requireApi = false } = {}) {
-  if (!sourceImage) {
-    setStatus("请先上传视频截图");
+  if (!sourceImage && !referenceUrlInput.value.trim()) {
+    setStatus("请先上传视频截图或填写参考图 URL");
     return false;
   }
 
@@ -223,8 +220,23 @@ function updatePersonThumb(src) {
   personThumb.classList.remove("is-empty");
 }
 
+function updateReferenceUrlPreview() {
+  const url = referenceUrlInput.value.trim();
+  if (!url || sourceFile) return;
+
+  sourcePreview.innerHTML = "";
+  const preview = document.createElement("img");
+  preview.src = url;
+  preview.alt = "参考图 URL 预览";
+  preview.referrerPolicy = "no-referrer";
+  preview.onerror = () => {
+    sourcePreview.innerHTML = '<div class="empty-preview">参考图 URL</div>';
+  };
+  sourcePreview.append(preview);
+}
+
 function inferProductName() {
-  const raw = `${adImageFile?.name || ""}`.toLowerCase();
+  const raw = `${adImageFile?.name || ""} ${referenceUrlInput.value || ""}`.toLowerCase();
   if (/milk|奶|bottle|瓶/.test(raw)) return "牛奶瓶";
   if (/coffee|咖啡/.test(raw)) return "咖啡杯";
   if (/tea|茶/.test(raw)) return "茶饮杯";
@@ -261,39 +273,25 @@ function inferCaption(sceneLine, productName) {
 function getRecognitionInstruction() {
   return [
     "你是腾讯视频 AI 贴纸表情包功能的视觉理解模块。",
-    "请按三步完成：第一步结构化描述生成；第二步三位一体文案与产品位置生成；第三步生成控制指令。",
-    "必须真实分析用户上传的视频截图和广告产品图，不要用默认示例，不要凭空套用固定文案。",
-    "重点：不要把轻微皱眉、凝视一律解释成疑虑。要优先结合台词语义判断表达意图。比如台词像吐槽/抱怨，角色皱眉应服务于吐槽语气，而不一定是“心有疑虑”。",
-    "如果广告产品图是方便面，而台词包含“两面派/见面/面子”等可与“面”形成谐音或语义连接的词，应优先生成利用产品语义/谐音的文案，而不是抽象情绪词。",
+    "请真实分析用户上传的视频截图，不要用默认示例，不要凭空套用固定文案。",
+    "截图可能包含真人、字幕、人物动作、广告物品参考图。请把识别结果用于后续贴纸生成。",
     "必须只返回 JSON，不要 Markdown，不要解释。",
-    "推理要求：",
-    "1. 结构化描述：将人物、场景、动作、表情、字幕台词语义写成标准化文本。",
-    "2. 三位一体文案：台词语义锚点 × 角色情绪基调 × 产品语义/谐音/使用场景交叉推理，生成 2-3 个候选文案，选择最自然融合的一个。",
-    "3. 产品位置：根据产品形态决定放置方式，饮料/杯面/食品适合拿手上或放手边；服饰配饰适合穿戴；Logo 适合角落、杯身、衣服贴片或文字装饰；大型物体适合身旁或背景。",
-    "例子：视频台词“约xx吃饭” + 咖啡/星巴克产品，不要生成“约饭进行时”，应倾向“走，喝一杯”这类同时适合用户表达和广告传播的文案。",
-    "例子：台词“两面派” + 方便面产品 + 角色皱眉抱怨，应倾向“别当两面派”“来碗真面派”等面/两面双关方向，而不是“心有疑虑”。",
     "JSON 字段：",
     "{",
-    '  "structured_description": "标准化结构化描述，例如：一个人物：男性，25-30岁，表情凝重，穿深色西装；背景：办公室室内；台词语义：职场压力下的坚持；动作：站立，手握文件",',
     '  "character": "人物身份或画面主体，例如女性角色/男性角色/真人大头/多人对话",',
     '  "scene": "场景，例如室内办公室/餐桌对话/街景/近景自拍",',
-    '  "action": "人物动作和情绪，尽量客观，例如皱眉低头/侧脸凝视/抱臂拿杯子/正在对话；不要过度推断为疑虑、悲伤等",',
+    '  "action": "人物动作和情绪，例如抱臂拿杯子正在对话/惊讶/开心/皱眉",',
     '  "subtitle": "从截图中 OCR 出来的原始台词；如果看不清就写空字符串",',
-    '  "dialogue_anchor": "台词语义锚点，例如拒绝/守候/吐槽/抱怨/邀请/犹豫/压力/开心",',
-    '  "emotion_tone": "角色情绪基调，例如愤怒吐槽/轻松邀约/委屈抱怨/坚定拒绝/开心炫耀",',
-    '  "product_semantics": "广告产品的语义、谐音、使用场景，例如方便面=面/两面/速食/加班夜宵，咖啡=喝一杯/提神/见面聊天",',
-    '  "caption_candidates": ["候选文案1", "候选文案2", "候选文案3"],',
-    '  "main_caption": "从候选中选出的最终贴纸主文案，中文 2 到 8 个字；必须同时自然连接台词语义、角色情绪和产品语义/谐音/使用场景",',
-    '  "ad_object": "从广告产品图或截图中识别到的商品/品牌视觉元素；没有广告产品图就写适合自然植入的小商品",',
-    '  "product_usage": "根据广告产品图判断它在贴纸里的自然出现方式：handheld 表示适合拿在手上，wearable 表示适合穿戴/贴身展示，corner 表示适合放在贴纸角落/Logo 装饰，background 表示适合作为背景/氛围装饰",',
-    '  "sticker_direction": "一句贴纸生成建议，说明人物、广告产品、文字如何组合；必须说明产品位置和文案为什么适配"',
+    '  "main_caption": "结合台词、表情和动作提炼的贴纸主文案，中文，2 到 8 个字，不能照搬广告品名，不能无关",',
+    '  "ad_object": "从广告物品图或截图中识别到的商品/品牌视觉元素；没有就写适合自然植入的小商品",',
+    '  "sticker_direction": "一句贴纸生成建议，说明人物、广告物品和文字如何组合"',
     "}",
   ].join("\n");
 }
 
 function getVisionContentForOpenAI(text) {
   const content = [{ type: "text", text }];
-  const mainImage = sourceImage?.src;
+  const mainImage = sourceImage?.src || referenceUrlInput.value.trim();
   if (mainImage) {
     content.push({
       type: "image_url",
@@ -311,7 +309,7 @@ function getVisionContentForOpenAI(text) {
 
 function getVisionContentForDashScope(text) {
   const content = [{ text }];
-  const mainImage = sourceImage?.src;
+  const mainImage = sourceImage?.src || referenceUrlInput.value.trim();
   if (mainImage) content.push({ image: mainImage });
   if (adImage?.src) content.push({ image: adImage.src });
   return content;
@@ -410,11 +408,6 @@ function hasMeaningfulRecognition(result) {
     result?.caption,
     result?.ad_object,
     result?.product,
-    result?.structured_description,
-    result?.dialogue_anchor,
-    result?.emotion_tone,
-    result?.product_semantics,
-    result?.sticker_direction,
   ]
     .map((value) => normalizeStickerText(value))
     .filter(Boolean);
@@ -429,14 +422,12 @@ function applyRecognitionResult(result) {
   const subtitle = normalizeStickerText(result.subtitle);
   const mainCaption = normalizeStickerText(result.main_caption || result.caption);
   const adObject = normalizeStickerText(result.ad_object || result.product);
-  const productUsage = normalizeStickerText(result.product_usage || result.sticker_direction);
 
   if (characterInput) characterInput.value = character || "已识别人物";
   if (sceneInput) sceneInput.value = scene || "已识别场景";
   subtitleInput.value = action || subtitle || "已识别动作";
   captionInput.value = mainCaption || inferCaption(subtitle || action, adObject);
   adObjectInput.value = adObject || inferProductName();
-  if (productUsageInput) productUsageInput.value = productUsage;
   promptOutput.value = buildPrompt(activeStyle);
 }
 
@@ -872,11 +863,10 @@ function buildPrompt(styleId = getSelectedStyle()) {
   const action = subtitleInput.value.trim() || "根据截图里的台词和动作生成贴纸情绪";
   const caption = getPrimaryCaption();
   const product = adObjectInput.value.trim() || "一个小型广告商品";
-  const productUsage = productUsageInput?.value?.trim() || "根据产品形态自然决定植入位置";
   const character = characterInput?.value?.trim() || "人物角色";
   const scene = sceneInput?.value?.trim() || "截图场景";
   const adLine = adImageFile
-    ? `如果上传了广告产品图，必须使用它作为广告方要宣传的核心产品/品牌元素。根据产品图语义选择自然位置：饮料/杯子/食品/方便面适合人物手持、靠近手部或放在桌面/身前；服饰/配饰适合穿戴在人物身上；Logo/品牌标识适合放在贴纸角落、杯身/包装标签、衣服贴片或文字装饰中；大型物体适合放在身旁或背景。不能省略，不能换成无关商品，不要遮挡人物脸部。识别到的广告元素名称：${product}。产品植入策略：${productUsage}。`
+    ? `必须使用上传的广告产品图作为广告方要宣传的核心产品/品牌元素。无论上传的是实物、包装、Logo 还是品牌标识，都必须清晰出现在贴纸中，作为人物手持物、身旁产品、角标或文字装饰，不能省略，不能换成无关商品，不要遮挡人物脸部。识别到的广告元素名称：${product}。`
     : `必须加入广告元素：${product}，作为人物手持物、身旁产品或右下角装饰，不要遮挡脸部。`;
 
   return [
@@ -887,10 +877,10 @@ function buildPrompt(styleId = getSelectedStyle()) {
     `场景参考（不可渲染成文字）：「${scene}」。`,
     `动作/情绪参考（不可渲染成文字）：「${action}」。`,
     "不要在画面里出现“抱臂”“手持杯子”“正在对话”“室内”“办公室”“女性角色”等任何识别描述词。",
-    `贴纸上唯一允许出现的大标题文字是：「${caption}」。这句主文案必须已经综合考虑截图台词/动作、角色情绪和广告产品语义/谐音/使用场景。比如台词是约人吃饭、广告是咖啡/星巴克时，文案应更偏“走，喝一杯”；台词含“两面派”、产品是方便面时，应利用“面/两面/真面派”等自然双关，而不是抽象成“心有疑虑”。`,
+    `贴纸上唯一允许出现的大标题文字是：「${caption}」。必须只显示这句主文案。`,
     `不要生成与主文案无关的大字，不要把动作描述、场景描述、人物描述、广告物品名称改写成标题，不要额外编造口号。装饰文字如必须出现，只能重复或拆分主文案「${caption}」。`,
     adLine,
-    "视频真人截图用于识别人、动作、台词和整体场景。",
+    "如果参考图 URL 存在，优先把它作为人物/画面视觉参考；视频真人截图用于识别人、动作、台词和整体场景。",
     "构图要求：人物是主体，大头占画面中心；有厚白描边、干净阴影、可直接用于聊天贴纸；广告元素自然融入画面，不像硬广横幅。",
     "文字要求：主文案放在底部或人物旁边的大标题区；字体简单粗大，最多一到两行；不要添加任何小气泡台词或说明文字。",
     "风格参考：真人广告贴纸、明星代言海报、可爱大头贴、商品装饰物、干净白底或透明底。",
@@ -904,8 +894,8 @@ async function generateSticker() {
     return;
   }
 
-  if (!sourceImage) {
-    setStatus("请先上传视频截图");
+  if (!sourceImage && !referenceUrlInput.value.trim()) {
+    setStatus("请先上传视频截图或填写参考图 URL");
     return;
   }
 
@@ -935,12 +925,12 @@ async function generateWithApi(provider) {
     return;
   }
 
-  if (!sourceImage) {
+  if (!sourceImage && !referenceUrlInput.value.trim()) {
     setStatus("请先上传视频截图");
     return;
   }
 
-  if (sourceImage && !hasRecognized && !hasManualRecognitionInput()) {
+  if ((sourceImage || referenceUrlInput.value.trim()) && !hasRecognized && !hasManualRecognitionInput()) {
     setStatus("请先识别上传图片，或手动填写识别结果和主文案");
     return;
   }
@@ -1013,6 +1003,8 @@ async function requestOpenAIImage(apiKey, prompt) {
 }
 
 function getReferenceImagePayload() {
+  const url = referenceUrlInput.value.trim();
+  if (url) return url;
   if (sourceImage?.src?.startsWith("data:")) return sourceImage.src;
   return "";
 }
@@ -1204,10 +1196,10 @@ function clearAll() {
   imageInput.value = "";
   adImageInput.value = "";
   apiKeyInput.value = "";
+  referenceUrlInput.value = "";
   subtitleInput.value = "";
   captionInput.value = "";
   adObjectInput.value = "";
-  if (productUsageInput) productUsageInput.value = "";
   if (characterInput) characterInput.value = "";
   if (sceneInput) sceneInput.value = "";
   providerSelect.value = "qwen-image";
@@ -1274,7 +1266,7 @@ outputDownloadBtn.addEventListener("click", () => downloadSticker(activeStyle));
 apiKeyInput.addEventListener("change", () => {
   hasRecognized = false;
   setRecognitionState("idle");
-  setStatus(sourceImage ? "API Key 已更新，请点击识别上传图片" : "准备 API");
+  setStatus(sourceImage || referenceUrlInput.value.trim() ? "API Key 已更新，请点击识别上传图片" : "准备 API");
 });
 
 document.querySelectorAll("input[name='style']").forEach((input) => {
@@ -1299,6 +1291,11 @@ document.querySelectorAll("input[name='style']").forEach((input) => {
   });
 });
 
+referenceUrlInput.addEventListener("input", () => {
+  updateReferenceUrlPreview();
+  markReferencesChanged();
+});
+
 providerSelect.addEventListener("change", () => {
   hasRecognized = false;
   setRecognitionState("idle");
@@ -1307,7 +1304,7 @@ providerSelect.addEventListener("change", () => {
   } else {
     clearRecognitionFields();
   }
-  const hasReference = sourceImage;
+  const hasReference = sourceImage || referenceUrlInput.value.trim();
   setStatus(hasReference ? "服务商已切换，请点击识别上传图片" : "准备 API");
 });
 

@@ -433,12 +433,7 @@ h2 {
   display: grid;
   grid-template-columns: minmax(0, 0.92fr) minmax(320px, 0.72fr);
   gap: 20px;
-  align-items: stretch;
-}
-
-.prompt-card {
-  display: flex;
-  min-height: 474px;
+  align-items: start;
 }
 
 .sticker-output {
@@ -448,7 +443,7 @@ h2 {
 
 .canvas-stage {
   position: relative;
-  min-height: 474px;
+  min-height: 420px;
   border: 1px dashed rgba(47, 176, 82, 0.35);
   border-radius: 10px;
   display: grid;
@@ -545,10 +540,14 @@ h2 {
   font-weight: 900;
 }
 
+.prompt-card {
+  margin-top: 10px;
+}
+
 #promptOutput {
   display: block;
   width: 100%;
-  min-height: 100%;
+  min-height: 92px;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 12px;
