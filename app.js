@@ -33,6 +33,8 @@ const recognitionStatuses = [
   document.querySelector("#lineStatus"),
 ];
 
+const outputSize = 900;
+const generatedCanvases = new Map();
 const generatedApiImages = new Map();
 let sourceImage = null;
 let sourceFile = null;
@@ -43,6 +45,7 @@ let hasGeneratedSticker = false;
 let hasRecognized = false;
 let recognitionPromise = null;
 let recognitionMeta = {};
+const alwaysUseAd = true;
 const alwaysTransparent = true;
 
 const styles = [
@@ -148,6 +151,7 @@ function clearRecognitionFields() {
 function markReferencesChanged() {
   hasRecognized = false;
   generatedApiImages.clear();
+  generatedCanvases.clear();
   showCanvasPreview();
   setDownloadReady(false);
   setRecognitionState("idle");
@@ -166,7 +170,7 @@ async function runRecognition({ requireApi = false } = {}) {
   if (provider === "minimax") {
     hasRecognized = false;
     setRecognitionState("idle");
-    setStatus("MiniMax image-01 不能识别图片和生成 Prompt，请切换 OpenAI 或 Qwen 完成识别");
+    setStatus("MiniMax image-01 不能识别图片，请切换 OpenAI 或 Qwen 识别，或手动填写后生成");
     return false;
   }
 
@@ -187,19 +191,18 @@ async function runRecognition({ requireApi = false } = {}) {
   showCanvasPreview();
 
   recognitionPromise = recognizeWithLLM(provider, apiKey)
-    .then(async (result) => {
-      setStatus("文本模型正在生成生图 Prompt...");
-      const promptDraft = await generatePromptDraft(provider, apiKey, result);
-      applyRecognitionResult(result, promptDraft);
+    .then((result) => {
+      applyRecognitionResult(result);
       hasRecognized = true;
       setRecognitionState("done");
-      setStatus("AI 已完成识别和 Prompt 生成，请检查后生成");
+      setStatus("LLM 已识别上传图片，请检查 Prompt 后生成");
       return true;
     })
     .catch((error) => {
       hasRecognized = false;
       setRecognitionState("idle");
       setStatus("识别失败");
+      if (requireApi) throw error;
       alert(error.message);
       return false;
     })
@@ -220,22 +223,70 @@ function updatePersonThumb(src) {
   personThumb.classList.remove("is-empty");
 }
 
+function inferProductName() {
+  const raw = `${adImageFile?.name || ""}`.toLowerCase();
+  if (/milk|奶|bottle|瓶/.test(raw)) return "牛奶瓶";
+  if (/coffee|咖啡/.test(raw)) return "咖啡杯";
+  if (/tea|茶/.test(raw)) return "茶饮杯";
+  if (/cola|soda|pepsi|可乐|汽水/.test(raw)) return "蓝色汽水罐";
+  if (/phone|手机/.test(raw)) return "手机";
+  return adImage ? "广告物品" : "蓝色汽水罐";
+}
+
+function inferSceneLine() {
+  if (!sourceImage) return "根据截图里的台词和动作生成贴纸情绪";
+  const isWide = sourceImage.width >= sourceImage.height;
+  return isWide ? "抱臂，手持杯子，正在对话" : "近景大头，正在对话";
+}
+
+function inferCharacter() {
+  if (!sourceImage) return "人物角色";
+  return sourceImage.width >= sourceImage.height ? "女性角色" : "真人大头角色";
+}
+
+function inferScene() {
+  if (!sourceImage) return "根据截图识别场景";
+  return sourceImage.width >= sourceImage.height ? "室内 / 办公室 / 对话场景" : "近景 / 生活场景";
+}
+
+function inferCaption(sceneLine, productName) {
+  if (/抱臂|杯子|对话/.test(sceneLine)) return "约凌奕凯吃饭";
+  if (/拿下|方案|必须/.test(sceneLine)) return "拿下";
+  if (/开心|笑|拉满|状态/.test(sceneLine)) return "状态拉满";
+  if (/花|钱|红包/.test(sceneLine)) return "拿去花";
+  if (/奶|汽水|咖啡|茶/.test(productName)) return "来一口";
+  return sceneLine.slice(0, 6) || "拿下";
+}
+
 function getRecognitionInstruction() {
   return [
     "你是腾讯视频 AI 贴纸表情包功能的视觉理解模块。",
-    "只做图片事实识别：人物、场景、动作/表情、截图字幕 OCR、广告产品图里的商品或品牌视觉元素。",
-    "必须真实分析用户上传的视频截图和可选广告产品图，不要使用默认示例，不要补造商品、品牌或文案。",
-    "不要生成生图 prompt，不要做营销创意推理，不要输出产品植入策略。",
+    "请按三步完成：第一步结构化描述生成；第二步三位一体文案与产品位置生成；第三步生成控制指令。",
+    "必须真实分析用户上传的视频截图和广告产品图，不要用默认示例，不要凭空套用固定文案。",
+    "重点：不要把轻微皱眉、凝视一律解释成疑虑。要优先结合台词语义判断表达意图。比如台词像吐槽/抱怨，角色皱眉应服务于吐槽语气，而不一定是“心有疑虑”。",
+    "如果广告产品图是方便面，而台词包含“两面派/见面/面子”等可与“面”形成谐音或语义连接的词，应优先生成利用产品语义/谐音的文案，而不是抽象情绪词。",
     "必须只返回 JSON，不要 Markdown，不要解释。",
+    "推理要求：",
+    "1. 结构化描述：将人物、场景、动作、表情、字幕台词语义写成标准化文本。",
+    "2. 三位一体文案：台词语义锚点 × 角色情绪基调 × 产品语义/谐音/使用场景交叉推理，生成 2-3 个候选文案，选择最自然融合的一个。",
+    "3. 产品位置：根据产品形态决定放置方式，饮料/杯面/食品适合拿手上或放手边；服饰配饰适合穿戴；Logo 适合角落、杯身、衣服贴片或文字装饰；大型物体适合身旁或背景。",
+    "例子：视频台词“约xx吃饭” + 咖啡/星巴克产品，不要生成“约饭进行时”，应倾向“走，喝一杯”这类同时适合用户表达和广告传播的文案。",
+    "例子：台词“两面派” + 方便面产品 + 角色皱眉抱怨，应倾向“别当两面派”“来碗真面派”等面/两面双关方向，而不是“心有疑虑”。",
     "JSON 字段：",
     "{",
-    '  "structured_description": "基于图片事实的标准化描述",',
-    '  "character": "人物身份、人数、外观和画面主体；不确定就客观描述",',
-    '  "scene": "场景和环境",',
-    '  "action": "人物动作和表情，尽量客观",',
+    '  "structured_description": "标准化结构化描述，例如：一个人物：男性，25-30岁，表情凝重，穿深色西装；背景：办公室室内；台词语义：职场压力下的坚持；动作：站立，手握文件",',
+    '  "character": "人物身份或画面主体，例如女性角色/男性角色/真人大头/多人对话",',
+    '  "scene": "场景，例如室内办公室/餐桌对话/街景/近景自拍",',
+    '  "action": "人物动作和情绪，尽量客观，例如皱眉低头/侧脸凝视/抱臂拿杯子/正在对话；不要过度推断为疑虑、悲伤等",',
     '  "subtitle": "从截图中 OCR 出来的原始台词；如果看不清就写空字符串",',
-    '  "ad_object": "广告产品图中实际识别到的商品/品牌/包装视觉元素；没有广告产品图或看不清就写空字符串",',
-    '  "ad_visual_detail": "广告产品的颜色、形态、包装、Logo、文字等可见细节；没有就写空字符串"',
+    '  "dialogue_anchor": "台词语义锚点，例如拒绝/守候/吐槽/抱怨/邀请/犹豫/压力/开心",',
+    '  "emotion_tone": "角色情绪基调，例如愤怒吐槽/轻松邀约/委屈抱怨/坚定拒绝/开心炫耀",',
+    '  "product_semantics": "广告产品的语义、谐音、使用场景，例如方便面=面/两面/速食/加班夜宵，咖啡=喝一杯/提神/见面聊天",',
+    '  "caption_candidates": ["候选文案1", "候选文案2", "候选文案3"],',
+    '  "main_caption": "从候选中选出的最终贴纸主文案，中文 2 到 8 个字；必须同时自然连接台词语义、角色情绪和产品语义/谐音/使用场景",',
+    '  "ad_object": "从广告产品图或截图中识别到的商品/品牌视觉元素；没有广告产品图就写适合自然植入的小商品",',
+    '  "product_usage": "根据广告产品图判断它在贴纸里的自然出现方式：handheld 表示适合拿在手上，wearable 表示适合穿戴/贴身展示，corner 表示适合放在贴纸角落/Logo 装饰，background 表示适合作为背景/氛围装饰",',
+    '  "sticker_direction": "一句贴纸生成建议，说明人物、广告产品、文字如何组合；必须说明产品位置和文案为什么适配"',
     "}",
   ].join("\n");
 }
@@ -355,9 +406,15 @@ function hasMeaningfulRecognition(result) {
     result?.scene,
     result?.action,
     result?.subtitle,
+    result?.main_caption,
+    result?.caption,
     result?.ad_object,
+    result?.product,
     result?.structured_description,
-    result?.ad_visual_detail,
+    result?.dialogue_anchor,
+    result?.emotion_tone,
+    result?.product_semantics,
+    result?.sticker_direction,
   ]
     .map((value) => normalizeStickerText(value))
     .filter(Boolean);
@@ -365,130 +422,22 @@ function hasMeaningfulRecognition(result) {
   return values.some((value) => !/无图片|没有图片|无法查看|无法读取|no image|image data/i.test(value));
 }
 
-async function generatePromptDraft(provider, apiKey, recognition) {
-  if (provider === "openai-gpt-image-2") return generatePromptDraftWithOpenAI(apiKey, recognition);
-  if (provider === "qwen-image") return generatePromptDraftWithQwen(apiKey, recognition);
-  throw new Error("当前服务商没有接入识别后的文本 Prompt 生成，请切换 OpenAI 或通义千问。");
-}
-
-function getPromptDraftInstruction(recognition) {
-  const visualJson = JSON.stringify(recognition, null, 2);
-  const hasAdReference = Boolean(adImageFile);
-  return [
-    "你是腾讯视频 AI 贴纸表情包功能的 Prompt 生成模块。",
-    "输入是视觉模型识别出的 JSON。请只基于这些识别事实，结合贴纸表情包目标，生成最终可直接发送给生图模型的 prompt。",
-    "所有输出字段都必须使用简体中文。除真实品牌名/包装文字外，不要使用英文句子。",
-    "不要加入未识别到的商品、品牌、颜色、包装或人物身份。没有广告产品图时，不要硬塞广告商品。",
-    "主文案由你生成，不要把文案创意交给生图模型。主文案需要短、自然、适合聊天表达；可以结合字幕语义、人物动作/表情和广告产品语义，但不要复制动作/场景描述当标题。",
-    hasAdReference
-      ? "用户上传了广告产品图，请给出产品自然植入策略：handheld / wearable / corner / background 中选一个，并可附短说明。"
-      : "用户没有上传广告产品图，product_usage 必须写空字符串。",
-    "image_prompt 必须是完整生图 prompt，并且必须包含以下硬性要求：",
-    "1. 用中文直接画面生成指令写，不要写成分析过程、规则列表或给模型看的元指令。",
-    "2. 开头明确写“方形透明背景 PNG 贴纸表情包”。",
-    "3. 明确主体是贴纸抠图效果，不是矩形照片；人物/商品外轮廓有厚白边贴纸描边和干净阴影。",
-    "4. 大致参考上传视频截图中的人物、画面关系和动作/表情，并具体描述动作可以是什么样的。",
-    "5. 贴纸中唯一文字是尖括号中的大标题，例如 <别当两面派>，只渲染一次。",
-    "6. 有广告产品图时，使用识别到的实际产品/品牌元素，自然植入且不遮挡人物脸部。",
-    "输出必须是 JSON，不要 Markdown，不要解释。",
-    "JSON 字段：",
-    "{",
-    '  "main_caption": "最终贴纸大标题，中文 2 到 8 个字",',
-    '  "product_usage": "广告产品自然植入方式；没有广告产品图时写空字符串",',
-    '  "image_prompt": "最终生图 prompt，必须把 main_caption 放在尖括号中且要求只出现一次"',
-    "}",
-    "视觉识别 JSON：",
-    visualJson,
-  ].join("\n");
-}
-
-async function generatePromptDraftWithOpenAI(apiKey, recognition) {
-  const result = await fetchJson("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "gpt-4o-mini",
-      temperature: 0.2,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: "你只输出合法 JSON，所有字段必须使用简体中文。" },
-        { role: "user", content: getPromptDraftInstruction(recognition) },
-      ],
-    }),
-  });
-  return parsePromptDraft(extractChatText(result), "OpenAI Prompt 生成");
-}
-
-async function generatePromptDraftWithQwen(apiKey, recognition) {
-  const result = await fetchJson("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "qwen-plus",
-      temperature: 0.2,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: "你只输出合法 JSON，所有字段必须使用简体中文。" },
-        { role: "user", content: getPromptDraftInstruction(recognition) },
-      ],
-    }),
-  });
-  return parsePromptDraft(extractChatText(result), "通义千问 Prompt 生成");
-}
-
-function parsePromptDraft(text, providerName) {
-  const raw = String(text || "").trim();
-  const jsonText = raw.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1] || raw.match(/\{[\s\S]*\}/)?.[0] || raw;
-  try {
-    const result = JSON.parse(jsonText);
-    if (!normalizeStickerText(result.main_caption) || !normalizeStickerText(result.image_prompt)) throw new Error("empty");
-    validateImagePromptDraft(result);
-    return result;
-  } catch {
-    throw new Error(`${providerName} 没有返回可解析的 Prompt JSON：${raw.slice(0, 600)}`);
-  }
-}
-
-function validateImagePromptDraft(result) {
-  const caption = normalizeStickerText(result.main_caption);
-  const prompt = normalizeStickerText(result.image_prompt);
-  if (!/[\u4e00-\u9fa5]/.test(prompt)) throw new Error("prompt-not-chinese");
-  if (!prompt.includes(`<${caption}>`)) throw new Error("prompt-missing-caption");
-  if (!/贴纸|表情包/.test(prompt)) throw new Error("prompt-missing-sticker");
-  if (!/透明背景|透明底/.test(prompt)) throw new Error("prompt-missing-transparent");
-  if (!/白边|白色描边|厚白描边/.test(prompt)) throw new Error("prompt-missing-white-outline");
-}
-
-function applyRecognitionResult(result, promptDraft = {}) {
+function applyRecognitionResult(result) {
   const character = normalizeStickerText(result.character);
   const scene = normalizeStickerText(result.scene);
   const action = normalizeStickerText(result.action);
   const subtitle = normalizeStickerText(result.subtitle);
-  const mainCaption = normalizeStickerText(promptDraft.main_caption);
-  const adObject = normalizeStickerText(result.ad_object);
-  const productUsage = normalizeStickerText(promptDraft.product_usage);
-  const imagePrompt = normalizeStickerText(promptDraft.image_prompt);
+  const mainCaption = normalizeStickerText(result.main_caption || result.caption);
+  const adObject = normalizeStickerText(result.ad_object || result.product);
+  const productUsage = normalizeStickerText(result.product_usage || result.sticker_direction);
 
-  recognitionMeta = {
-    ...result,
-    mainCaption,
-    productUsage,
-    generatedPrompt: imagePrompt,
-  };
-
-  if (characterInput) characterInput.value = character;
-  if (sceneInput) sceneInput.value = scene;
-  subtitleInput.value = action || subtitle;
-  captionInput.value = mainCaption;
-  adObjectInput.value = adObject;
+  if (characterInput) characterInput.value = character || "已识别人物";
+  if (sceneInput) sceneInput.value = scene || "已识别场景";
+  subtitleInput.value = action || subtitle || "已识别动作";
+  captionInput.value = mainCaption || inferCaption(subtitle || action, adObject);
+  adObjectInput.value = adObject || inferProductName();
   if (productUsageInput) productUsageInput.value = productUsage;
-  promptOutput.value = imagePrompt;
+  promptOutput.value = buildPrompt(activeStyle);
 }
 
 function hasManualRecognitionInput() {
@@ -513,27 +462,313 @@ function dataUrlToFile(dataUrl, filename) {
 
 function drawStarterState() {
   showCanvasPreview();
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, outputSize, outputSize);
   canvasStage.classList.remove("has-result");
   if (outputPlaceholder) {
     outputPlaceholder.hidden = false;
     outputPlaceholder.textContent = "贴纸结果区";
   }
+  drawTransparentOrSoftBackground(ctx);
+  drawDecorativeBurst(ctx, 450, 395, 250, "#f2c94c");
+  drawProduct(ctx, 640, 560, "蓝色汽水罐", "poster", 1);
+  drawFacePlaceholder(ctx, 360, 315);
+  drawStickerText(ctx, "上传人物截图", 450, 735, "poster");
   clearRecognitionFields();
   setDownloadReady(false);
   setRecognitionState("idle");
 }
 
+function drawTransparentOrSoftBackground(context) {
+  if (alwaysTransparent) return;
+  const bg = context.createLinearGradient(0, 0, outputSize, outputSize);
+  bg.addColorStop(0, "#f7fbff");
+  bg.addColorStop(0.55, "#fff7e3");
+  bg.addColorStop(1, "#ffecef");
+  context.fillStyle = bg;
+  context.fillRect(0, 0, outputSize, outputSize);
+}
+
+function roundedPath(context, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  context.beginPath();
+  context.moveTo(x + r, y);
+  context.arcTo(x + width, y, x + width, y + height, r);
+  context.arcTo(x + width, y + height, x, y + height, r);
+  context.arcTo(x, y + height, x, y, r);
+  context.arcTo(x, y, x + width, y, r);
+  context.closePath();
+}
+
+function drawFacePlaceholder(context, x, y) {
+  context.save();
+  context.shadowColor = "rgba(23, 32, 27, 0.2)";
+  context.shadowBlur = 28;
+  context.shadowOffsetY = 18;
+  context.lineWidth = 22;
+  context.strokeStyle = "#ffffff";
+  context.fillStyle = "#f2c3a0";
+  context.beginPath();
+  context.ellipse(x, y, 142, 168, 0, 0, Math.PI * 2);
+  context.fill();
+  context.stroke();
+  context.shadowColor = "transparent";
+  context.fillStyle = "#20262d";
+  context.beginPath();
+  context.ellipse(x, y - 98, 154, 78, 0, Math.PI, Math.PI * 2);
+  context.fill();
+  context.fillStyle = "#12171c";
+  context.beginPath();
+  context.ellipse(x - 46, y - 18, 11, 15, 0, 0, Math.PI * 2);
+  context.ellipse(x + 46, y - 18, 11, 15, 0, 0, Math.PI * 2);
+  context.fill();
+  context.strokeStyle = "#b46158";
+  context.lineWidth = 8;
+  context.beginPath();
+  context.arc(x, y + 28, 42, 0.08, Math.PI - 0.08);
+  context.stroke();
+  context.restore();
+}
+
+function getPersonCrop() {
+  const img = sourceImage;
+  const crop = Math.min(img.width, img.height) * 0.78;
+  const srcX = Math.max(0, (img.width - crop) / 2);
+  const srcY = Math.max(0, img.height * 0.04);
+  return { srcX, srcY, srcW: crop, srcH: Math.min(crop, img.height - srcY) };
+}
+
+function drawPersonHead(context, variantStyle) {
+  const { srcX, srcY, srcW, srcH } = getPersonCrop();
+  const headSize = variantStyle === "cartoon" ? 500 : 465;
+  const x = variantStyle === "poster" ? 500 : 430;
+  const y = variantStyle === "poster" ? 305 : 310;
+
+  context.save();
+  context.shadowColor = "rgba(23, 32, 27, 0.26)";
+  context.shadowBlur = 34;
+  context.shadowOffsetY = 20;
+  context.lineWidth = 28;
+  context.strokeStyle = "#ffffff";
+  context.beginPath();
+  context.ellipse(x, y, headSize * 0.43, headSize * 0.49, 0, 0, Math.PI * 2);
+  context.stroke();
+  context.clip();
+  context.filter = getImageFilter(variantStyle);
+  context.drawImage(sourceImage, srcX, srcY, srcW, srcH, x - headSize / 2, y - headSize / 2, headSize, headSize);
+  context.filter = "none";
+  if (variantStyle === "cartoon") drawCartoonFaceOverlay(context, x, y);
+  context.restore();
+
+  context.save();
+  context.lineWidth = 24;
+  context.strokeStyle = "#ffffff";
+  context.beginPath();
+  context.ellipse(x, y, headSize * 0.43, headSize * 0.49, 0, 0, Math.PI * 2);
+  context.stroke();
+  context.restore();
+}
+
+function drawSmallBody(context, variantStyle) {
+  context.save();
+  context.translate(392, 565);
+  context.rotate(variantStyle === "poster" ? -0.05 : 0.04);
+  context.shadowColor = "rgba(23, 32, 27, 0.2)";
+  context.shadowBlur = 24;
+  context.shadowOffsetY = 16;
+  context.lineWidth = 22;
+  context.strokeStyle = "#ffffff";
+  roundedPath(context, -145, -85, 300, 230, 72);
+  context.fillStyle = variantStyle === "poster" ? "#1159a6" : "#24364d";
+  context.fill();
+  context.stroke();
+  context.shadowColor = "transparent";
+  context.fillStyle = "#ffffff";
+  roundedPath(context, -36, -78, 84, 88, 22);
+  context.fill();
+  context.restore();
+}
+
+function getImageFilter(variantStyle) {
+  if (variantStyle === "cartoon") return "contrast(1.24) saturate(1.85) brightness(1.08)";
+  if (variantStyle === "poster") return "contrast(1.08) saturate(1.2)";
+  return "contrast(1.03) saturate(1.08)";
+}
+
+function drawCartoonFaceOverlay(context, x, y) {
+  context.globalCompositeOperation = "source-over";
+  context.fillStyle = "rgba(255, 110, 120, 0.42)";
+  context.beginPath();
+  context.ellipse(x - 95, y + 42, 42, 24, -0.08, 0, Math.PI * 2);
+  context.ellipse(x + 95, y + 42, 42, 24, 0.08, 0, Math.PI * 2);
+  context.fill();
+  context.strokeStyle = "#ffffff";
+  context.lineWidth = 10;
+  [["left", -135], ["right", 135]].forEach((item) => {
+    const offset = item[1];
+    context.beginPath();
+    context.moveTo(x + offset, y + 42);
+    context.lineTo(x + offset - 18, y + 62);
+    context.stroke();
+    context.beginPath();
+    context.moveTo(x + offset + 28, y + 42);
+    context.lineTo(x + offset + 45, y + 62);
+    context.stroke();
+  });
+  drawSweatDrop(context, x - 190, y - 70, 1.1);
+}
+
+function drawDecorativeBurst(context, x, y, radius, color) {
+  context.save();
+  context.translate(x, y);
+  context.fillStyle = color;
+  for (let i = 0; i < 18; i += 1) {
+    context.rotate((Math.PI * 2) / 18);
+    context.beginPath();
+    context.moveTo(radius * 0.55, -8);
+    context.lineTo(radius, 0);
+    context.lineTo(radius * 0.55, 8);
+    context.closePath();
+    context.fill();
+  }
+  context.restore();
+}
+
+function drawSweatDrop(context, x, y, scale = 1) {
+  context.save();
+  context.translate(x, y);
+  context.scale(scale, scale);
+  context.shadowColor = "rgba(0, 87, 140, 0.22)";
+  context.shadowBlur = 12;
+  context.fillStyle = "#21a7e8";
+  context.beginPath();
+  context.moveTo(0, -72);
+  context.bezierCurveTo(56, -16, 58, 54, 0, 70);
+  context.bezierCurveTo(-58, 54, -56, -16, 0, -72);
+  context.fill();
+  context.fillStyle = "rgba(255, 255, 255, 0.42)";
+  context.beginPath();
+  context.ellipse(-18, -24, 14, 28, 0.35, 0, Math.PI * 2);
+  context.fill();
+  context.restore();
+}
+
+function drawProduct(context, x, y, label, variantStyle, scale = 1) {
+  context.save();
+  context.translate(x, y);
+  context.rotate(variantStyle === "poster" ? 0.17 : -0.16);
+  context.scale(scale, scale);
+  context.shadowColor = "rgba(23, 32, 27, 0.25)";
+  context.shadowBlur = 18;
+  context.shadowOffsetY = 12;
+  context.lineWidth = 12;
+  context.strokeStyle = "#ffffff";
+
+  if (/奶|瓶|milk|bottle/i.test(label)) {
+    roundedPath(context, -52, -118, 104, 218, 22);
+    context.fillStyle = "#ffffff";
+    context.fill();
+    context.stroke();
+    roundedPath(context, -28, -152, 56, 42, 12);
+    context.fill();
+    context.stroke();
+    context.fillStyle = "#24a06e";
+    roundedPath(context, -38, -40, 76, 80, 18);
+    context.fill();
+  } else {
+    roundedPath(context, -54, -118, 108, 236, 28);
+    context.fillStyle = "#1267b3";
+    context.fill();
+    context.stroke();
+    context.fillStyle = "#e84d4f";
+    context.beginPath();
+    context.arc(0, -10, 38, 0, Math.PI * 2);
+    context.fill();
+    context.fillStyle = "#ffffff";
+    context.font = "900 26px Inter, system-ui, sans-serif";
+    context.textAlign = "center";
+    context.fillText("AD", 0, 0);
+  }
+
+  context.shadowColor = "transparent";
+  context.fillStyle = "#ffffff";
+  context.font = "900 18px Inter, system-ui, sans-serif";
+  context.textAlign = "center";
+  context.fillText(label.slice(0, 5), 0, 70);
+  context.restore();
+}
+
+function drawSideText(context, text, side, variantStyle) {
+  const chars = normalizeStickerText(text || getPrimaryCaption()).slice(0, 5).split("");
+  const x = side === "left" ? 108 : 790;
+  const y = side === "left" ? 170 : 170;
+  context.save();
+  chars.forEach((char, index) => {
+    context.beginPath();
+    context.arc(x, y + index * 98, 46, 0, Math.PI * 2);
+    context.fillStyle = variantStyle === "poster" ? "#1267b3" : "#e84d4f";
+    context.fill();
+    context.lineWidth = 10;
+    context.strokeStyle = "#ffffff";
+    context.stroke();
+    context.fillStyle = "#fff3a0";
+    context.font = "900 44px serif";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(char, x, y + index * 98 + 2);
+  });
+  context.restore();
+}
+
 function getPrimaryCaption() {
-  return normalizeStickerText(captionInput.value);
+  return normalizeStickerText(captionInput.value || subtitleInput.value || "拿下");
 }
 
 function getSceneLine() {
-  return normalizeStickerText(subtitleInput.value);
+  return normalizeStickerText(subtitleInput.value || "根据动作生成情绪");
 }
 
 function normalizeStickerText(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
+}
+
+function drawStickerText(context, text, x, y, variantStyle) {
+  const cleanText = normalizeStickerText(text) || "拿下";
+  const lines = wrapText(context, cleanText, 620, 2, "900 64px Inter, system-ui, sans-serif");
+  const height = 76 + lines.length * 64;
+
+  context.save();
+  context.translate(x, y);
+  context.rotate(variantStyle === "cartoon" ? -0.04 : 0.025);
+  roundedPath(context, -345, -height / 2, 690, height, 34);
+  context.fillStyle = variantStyle === "poster" ? "#1267b3" : "#e84d4f";
+  context.strokeStyle = "#ffffff";
+  context.lineWidth = 14;
+  context.shadowColor = "rgba(23, 32, 27, 0.2)";
+  context.shadowBlur = 22;
+  context.shadowOffsetY = 14;
+  context.fill();
+  context.stroke();
+  context.shadowColor = "transparent";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.font = "900 64px Inter, system-ui, sans-serif";
+  context.lineWidth = 10;
+  context.strokeStyle = "rgba(23, 32, 27, 0.2)";
+  context.fillStyle = "#fff5b5";
+  lines.forEach((line, index) => {
+    const lineY = -((lines.length - 1) * 32) + index * 64 + 3;
+    context.strokeText(line, 0, lineY);
+    context.fillText(line, 0, lineY);
+  });
+  context.restore();
+}
+
+function createDownloadIcon() {
+  const icon = document.createElement("span");
+  icon.className = "download-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = "↓";
+  return icon;
 }
 
 function showOutputProcess(message) {
@@ -545,13 +780,152 @@ function showOutputProcess(message) {
   }
 }
 
+function drawSceneTag(context, text, variantStyle) {
+  const cleanText = normalizeStickerText(text);
+  if (!cleanText) return;
+
+  const tagText = `“${cleanText.slice(0, 18)}”`;
+  context.save();
+  context.translate(455, variantStyle === "poster" ? 108 : 112);
+  context.rotate(variantStyle === "cartoon" ? 0.04 : -0.025);
+  context.font = "800 30px Inter, system-ui, sans-serif";
+  const width = Math.min(700, Math.max(280, context.measureText(tagText).width + 56));
+  roundedPath(context, -width / 2, -31, width, 62, 22);
+  context.fillStyle = "rgba(255, 255, 255, 0.94)";
+  context.strokeStyle = variantStyle === "poster" ? "#1267b3" : "#e84d4f";
+  context.lineWidth = 6;
+  context.shadowColor = "rgba(23, 32, 27, 0.12)";
+  context.shadowBlur = 16;
+  context.shadowOffsetY = 8;
+  context.fill();
+  context.stroke();
+  context.shadowColor = "transparent";
+  context.fillStyle = "#17201b";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(tagText, 0, 2);
+  context.restore();
+}
+
+function getDecorativeCaption(text) {
+  const cleanText = normalizeStickerText(text);
+  if (cleanText.length <= 5) return cleanText;
+  return cleanText.slice(0, 5);
+}
+
+function wrapText(context, text, maxWidth, maxLines, font) {
+  context.save();
+  context.font = font;
+  const chars = text.includes(" ") ? text.split(/\s+/) : text.split("");
+  const lines = [];
+  let current = "";
+  chars.forEach((char) => {
+    const next = text.includes(" ") && current ? `${current} ${char}` : `${current}${char}`;
+    if (context.measureText(next).width <= maxWidth) {
+      current = next;
+    } else {
+      if (current) lines.push(current);
+      current = char;
+    }
+  });
+  if (current) lines.push(current);
+  context.restore();
+  return lines.slice(0, maxLines || 2);
+}
+
+function renderSticker(targetCanvas, variantStyle) {
+  const tctx = targetCanvas.getContext("2d");
+  targetCanvas.width = outputSize;
+  targetCanvas.height = outputSize;
+  tctx.clearRect(0, 0, outputSize, outputSize);
+
+  drawTransparentOrSoftBackground(tctx);
+
+  if (variantStyle !== "real") {
+    drawDecorativeBurst(tctx, 452, 346, variantStyle === "cartoon" ? 245 : 290, variantStyle === "cartoon" ? "#f2c94c" : "#dff0ff");
+  }
+
+  drawSmallBody(tctx, variantStyle);
+  drawPersonHead(tctx, variantStyle);
+
+  if (variantStyle === "cartoon") {
+    drawSweatDrop(tctx, 180, 245, 1.05);
+  }
+
+  const productLabel = adObjectInput.value.trim() || "广告物品";
+  if (alwaysUseAd || variantStyle === "poster") {
+    drawProduct(tctx, variantStyle === "poster" ? 705 : 670, variantStyle === "poster" ? 490 : 555, productLabel, variantStyle, variantStyle === "poster" ? 1.08 : 0.92);
+  }
+
+  if (variantStyle === "poster") {
+    drawSideText(tctx, getDecorativeCaption(getPrimaryCaption()), "left", variantStyle);
+    drawSideText(tctx, getDecorativeCaption(getPrimaryCaption()), "right", variantStyle);
+  }
+
+  drawStickerText(tctx, getPrimaryCaption(), 450, 760, variantStyle);
+}
+
 function buildPrompt(styleId = getSelectedStyle()) {
-  return normalizeStickerText(recognitionMeta.generatedPrompt);
+  const styleText = {
+    real: "真人广告贴纸，保留上传图中人物五官和发型，真人质感但做轻微夸张大头比例",
+  }[styleId];
+  const action = subtitleInput.value.trim() || "根据截图里的台词和动作生成贴纸情绪";
+  const caption = getPrimaryCaption();
+  const product = adObjectInput.value.trim() || "一个小型广告商品";
+  const productUsage = productUsageInput?.value?.trim() || "根据产品形态自然决定植入位置";
+  const character = characterInput?.value?.trim() || "人物角色";
+  const scene = sceneInput?.value?.trim() || "截图场景";
+  const adLine = adImageFile
+    ? `如果上传了广告产品图，必须使用它作为广告方要宣传的核心产品/品牌元素。根据产品图语义选择自然位置：饮料/杯子/食品/方便面适合人物手持、靠近手部或放在桌面/身前；服饰/配饰适合穿戴在人物身上；Logo/品牌标识适合放在贴纸角落、杯身/包装标签、衣服贴片或文字装饰中；大型物体适合放在身旁或背景。不能省略，不能换成无关商品，不要遮挡人物脸部。识别到的广告元素名称：${product}。产品植入策略：${productUsage}。`
+    : `必须加入广告元素：${product}，作为人物手持物、身旁产品或右下角装饰，不要遮挡脸部。`;
+
+  return [
+    "使用上传截图作为人物参考图，生成一张方形透明背景 PNG 贴纸/表情包贴纸。",
+    styleText,
+    "以下识别信息只供理解画面，绝对不要把这些描述文字画到贴纸上：",
+    `人物参考（不可渲染成文字）：「${character}」。`,
+    `场景参考（不可渲染成文字）：「${scene}」。`,
+    `动作/情绪参考（不可渲染成文字）：「${action}」。`,
+    "不要在画面里出现“抱臂”“手持杯子”“正在对话”“室内”“办公室”“女性角色”等任何识别描述词。",
+    `贴纸上唯一允许出现的大标题文字是：「${caption}」。这句主文案必须已经综合考虑截图台词/动作、角色情绪和广告产品语义/谐音/使用场景。比如台词是约人吃饭、广告是咖啡/星巴克时，文案应更偏“走，喝一杯”；台词含“两面派”、产品是方便面时，应利用“面/两面/真面派”等自然双关，而不是抽象成“心有疑虑”。`,
+    `不要生成与主文案无关的大字，不要把动作描述、场景描述、人物描述、广告物品名称改写成标题，不要额外编造口号。装饰文字如必须出现，只能重复或拆分主文案「${caption}」。`,
+    adLine,
+    "视频真人截图用于识别人、动作、台词和整体场景。",
+    "构图要求：人物是主体，大头占画面中心；有厚白描边、干净阴影、可直接用于聊天贴纸；广告元素自然融入画面，不像硬广横幅。",
+    "文字要求：主文案放在底部或人物旁边的大标题区；字体简单粗大，最多一到两行；不要添加任何小气泡台词或说明文字。",
+    "风格参考：真人广告贴纸、明星代言海报、可爱大头贴、商品装饰物、干净白底或透明底。",
+  ].join("\n");
 }
 
 async function generateSticker() {
   const provider = providerSelect.value;
-  await generateWithApi(provider);
+  if (provider !== "local") {
+    await generateWithApi(provider);
+    return;
+  }
+
+  if (!sourceImage) {
+    setStatus("请先上传视频截图");
+    return;
+  }
+
+  if (!hasRecognized && !hasManualRecognitionInput()) {
+    setStatus("请先识别上传图片，或手动填写识别结果和主文案");
+    return;
+  }
+
+  const selected = getSelectedStyle();
+  activeStyle = selected;
+  generatedCanvases.clear();
+  generatedApiImages.clear();
+
+  const variantCanvas = document.createElement("canvas");
+  renderSticker(variantCanvas, selected);
+  generatedCanvases.set(selected, variantCanvas);
+  drawActiveCanvas(selected);
+  promptOutput.value = buildPrompt(selected);
+  setDownloadReady(true);
+  setStatus("已生成草图");
 }
 
 async function generateWithApi(provider) {
@@ -567,29 +941,25 @@ async function generateWithApi(provider) {
   }
 
   if (sourceImage && !hasRecognized && !hasManualRecognitionInput()) {
-    setStatus("请先识别上传图片，让文本模型生成生图 Prompt");
+    setStatus("请先识别上传图片，或手动填写识别结果和主文案");
     return;
   }
 
   activeStyle = getSelectedStyle();
-  const prompt = buildPrompt(activeStyle);
-  if (!prompt) {
-    setStatus("请先点击识别上传图片，生成生图 Prompt");
-    return;
-  }
-  promptOutput.value = prompt;
+  promptOutput.value = buildPrompt(activeStyle);
   setStatus("请求生图中...");
   generateBtn.disabled = true;
   setDownloadReady(false);
   generatedApiImages.clear();
+  generatedCanvases.clear();
   showOutputProcess("生成中...");
 
   try {
     setStatus("生成真人广告贴纸中...");
-    const imageUrl = await requestImageGeneration(provider, apiKey, prompt);
+    const imageUrl = await requestImageGeneration(provider, apiKey, buildPrompt(activeStyle));
     generatedApiImages.set(activeStyle, imageUrl);
     setApiImage(imageUrl);
-    promptOutput.value = prompt;
+    promptOutput.value = buildPrompt(activeStyle);
     setDownloadReady(true);
     setStatus("API 已生成");
   } catch (error) {
@@ -700,7 +1070,7 @@ async function requestQwenImage(apiKey, prompt) {
         size: "1024*1024",
         n: 1,
         watermark: false,
-        prompt_extend: false,
+        prompt_extend: true,
       },
     }),
   });
@@ -781,6 +1151,13 @@ function drawActiveCanvas(styleId) {
   activeStyle = styleId;
   if (generatedApiImages.has(styleId)) {
     setApiImage(generatedApiImages.get(styleId));
+  } else if (generatedCanvases.has(styleId)) {
+    showCanvasPreview();
+    ctx.clearRect(0, 0, outputSize, outputSize);
+    ctx.drawImage(generatedCanvases.get(styleId), 0, 0);
+    canvasStage.classList.add("has-result");
+    if (outputPlaceholder) outputPlaceholder.hidden = true;
+    if (outputDownloadBtn) outputDownloadBtn.disabled = false;
   }
   promptOutput.value = buildPrompt(styleId);
 }
@@ -802,6 +1179,13 @@ async function downloadSticker(styleId = activeStyle) {
     }
     return;
   }
+
+  if (!generatedCanvases.has(styleId)) return;
+  const link = document.createElement("a");
+  link.download = `ai-sticker-${styleId}.png`;
+  link.href = generatedCanvases.get(styleId).toDataURL("image/png");
+  link.click();
+  setStatus("PNG 已下载");
 }
 
 function clearAll() {
@@ -811,6 +1195,7 @@ function clearAll() {
   adImage = null;
   activeStyle = "real";
   hasRecognized = false;
+  generatedCanvases.clear();
   generatedApiImages.clear();
   showCanvasPreview();
   setDownloadReady(false);
@@ -888,7 +1273,6 @@ generateBtn.addEventListener("click", generateSticker);
 outputDownloadBtn.addEventListener("click", () => downloadSticker(activeStyle));
 apiKeyInput.addEventListener("change", () => {
   hasRecognized = false;
-  recognitionMeta = {};
   setRecognitionState("idle");
   setStatus(sourceImage ? "API Key 已更新，请点击识别上传图片" : "准备 API");
 });
@@ -896,29 +1280,33 @@ apiKeyInput.addEventListener("change", () => {
 document.querySelectorAll("input[name='style']").forEach((input) => {
   input.addEventListener("change", () => {
     activeStyle = input.value;
-    if (recognitionMeta.generatedPrompt) {
+    if (hasRecognized || hasManualRecognitionInput()) {
       promptOutput.value = buildPrompt(input.value);
     }
     setDownloadReady(false);
-    setStatus(recognitionMeta.generatedPrompt ? "风格已更新，点击生成" : "风格已更新，请先识别上传图片生成 Prompt");
+    setStatus(hasRecognized || hasManualRecognitionInput() ? "风格已更新，点击生成" : "风格已更新，请先识别上传图片");
   });
 });
 
-[subtitleInput, captionInput, adObjectInput, productUsageInput, characterInput, sceneInput].forEach((input) => {
+[subtitleInput, captionInput, adObjectInput, characterInput, sceneInput].forEach((input) => {
   if (!input) return;
   input.addEventListener("input", () => {
-    recognitionMeta.generatedPrompt = "";
-    promptOutput.value = "识别结果已编辑，请重新点击“识别上传图片”，让文本模型生成新的生图 Prompt。";
+    if (hasRecognized || hasManualRecognitionInput()) {
+      promptOutput.value = buildPrompt(activeStyle);
+    }
     setDownloadReady(false);
-    setStatus("识别结果已编辑，请重新识别生成 Prompt");
+    setStatus(hasRecognized || hasManualRecognitionInput() ? "识别结果已编辑，点击生成" : "继续填写识别结果和主文案");
   });
 });
 
 providerSelect.addEventListener("change", () => {
   hasRecognized = false;
-  recognitionMeta = {};
   setRecognitionState("idle");
-  clearRecognitionFields();
+  if (hasManualRecognitionInput()) {
+    promptOutput.value = buildPrompt(activeStyle);
+  } else {
+    clearRecognitionFields();
+  }
   const hasReference = sourceImage;
   setStatus(hasReference ? "服务商已切换，请点击识别上传图片" : "准备 API");
 });
